@@ -1,95 +1,28 @@
-name: grab-video
-
-# 用途：借 GitHub 的服务器（有完整外网）下载视频，产物提交回本仓库，
-# 供外部读取后进入 AI 视频复刻的拆解流水线。
+name: grab
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: '视频链接（Instagram / YouTube / TikTok / B站 等）'
+        description: link
         required: true
-        type: string
-      quality:
-        description: '画质上限'
-        required: false
-        default: '1080'
-        type: choice
-        options: ['1080', '720', 'best']
-
 permissions:
   contents: write
-
 jobs:
-  grab:
+  g:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install yt-dlp + ffmpeg
-        run: |
-          python -m pip install -q -U yt-dlp
-          sudo apt-get -qq update
-          sudo apt-get -qq install -y ffmpeg
-          yt-dlp --version
-          ffmpeg -version | head -1
-
-      - name: Download
-        env:
-          IG_COOKIES: ${{ secrets.IG_COOKIES }}
+      - run: pip install -q -U yt-dlp && sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg
+      - env:
+          CK: ${{ secrets.IG_COOKIES }}
         run: |
           mkdir -p inbox
-          ARGS=""
-          if [ -n "$IG_COOKIES" ]; then
-            printf '%s' "$IG_COOKIES" > "$RUNNER_TEMP/cookies.txt"
-            ARGS="--cookies $RUNNER_TEMP/cookies.txt"
-            echo "使用 IG_COOKIES 登录态"
-          else
-            echo "未配置 IG_COOKIES，尝试匿名下载（Instagram 常会失败）"
-          fi
-
-          Q="${{ inputs.quality }}"
-          if [ "$Q" = "best" ]; then
-            FMT="bv*+ba/b"
-          else
-            FMT="bv*[height<=${Q}]+ba/b[height<=${Q}]/b"
-          fi
-
-          yt-dlp $ARGS -f "$FMT" --merge-output-format mp4 \
-            --write-info-json --write-thumbnail \
-            --no-playlist \
-            -o "inbox/%(id)s.%(ext)s" \
-            "${{ inputs.url }}" 2>&1 | tail -30
-
-          echo "--- 产物 ---"
+          if [ -n "$CK" ]; then printf '%s' "$CK" > c.txt; fi
+          C=""; if [ -f c.txt ]; then C="--cookies c.txt"; fi
+          yt-dlp $C -f "bv*+ba/b" --merge-output-format mp4 -o "inbox/%(id)s.%(ext)s" "${{ inputs.url }}"
+          ls -t inbox/*.mp4 | head -1 | xargs -n1 basename > inbox/LATEST
           ls -lh inbox
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,width,height,r_frame_rate -of default=nw=1 inbox/*.mp4 2>/dev/null || true
-
-          # 写一个固定入口文件，外部可免 API 直接读取文件名
-          ls -t inbox/*.mp4 2>/dev/null | head -1 | xargs -r -n1 basename > inbox/LATEST || true
-          echo "LATEST=$(cat inbox/LATEST 2>/dev/null)"
-
-      - name: Commit back
-        run: |
-          git config user.name "grab-bot"
-          git config user.email "grab-bot@users.noreply.github.com"
-          git add -f inbox
-          if git diff --cached --quiet; then
-            echo "没有新文件（下载可能失败）"
-          else
-            git commit -m "grab: ${{ inputs.url }}"
-            git push
-          fi
-
-      - name: Upload artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: video
-          path: inbox/
-          retention-days: 7
-          if-no-files-found: warn
+      - run: |
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add -f inbox && git commit -m grab && git push
